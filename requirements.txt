@@ -1,0 +1,8 @@
+streamlit
+openpyxl
+pandas
+matplotlib
+reportlab
+openai
+python-dotenv
+pydantic
