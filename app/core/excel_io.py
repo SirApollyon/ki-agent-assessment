@@ -1,69 +1,93 @@
-import openpyxl
 import re
+from typing import Any
+
+import openpyxl
+from openpyxl.workbook import Workbook
 
 REQUIRED_SHEETS = {"Input"}
 CODE_PATTERN = re.compile(r"^([A-Za-z]+)")
+GATEKEEPER_SUFFIXES = ("-G1", "-G2")
 
 
-def load_workbook(path: str):
-    wb = openpyxl.load_workbook(path, data_only=True)
-    missing = REQUIRED_SHEETS - set(wb.sheetnames)
-    if missing:
-        raise ValueError(f"Fehlende Sheets im Excel: {', '.join(sorted(missing))}. "
-                         f"Bitte dein Template verwenden.")
-    return wb
+def load_workbook(path: str) -> Workbook:
+    workbook = openpyxl.load_workbook(path, data_only=True)
+    missing_sheets = REQUIRED_SHEETS - set(workbook.sheetnames)
+    if missing_sheets:
+        missing_names = ", ".join(sorted(missing_sheets))
+        raise ValueError(
+            f"Fehlende Sheets im Excel: {missing_names}. Bitte das bereitgestellte Template verwenden."
+        )
+    return workbook
 
 
-def _normalize_code(value):
+def _normalize_code(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
-    value = value.strip()
-    if not value:
+
+    normalized = value.strip()
+    if not normalized:
         return None
-    match = CODE_PATTERN.match(value)
+
+    match = CODE_PATTERN.match(normalized)
     return match.group(1).upper() if match else None
 
 
-def _parse_score(value):
+def _parse_score(value: Any) -> float | None:
     if value is None:
         return None
+
     if isinstance(value, (int, float)):
         return float(value)
+
     if isinstance(value, str):
-        text = value.strip().replace(",", ".")
+        normalized = value.strip().replace(",", ".")
         try:
-            return float(text)
+            return float(normalized)
         except ValueError:
             return None
+
     return None
 
 
-def read_inputs(wb):
-    ws = wb["Input"]
+def _read_items(worksheet: Any) -> list[tuple[str, float]]:
+    items: list[tuple[str, float]] = []
 
-    use_case_name = ws["B4"].value or "Unbenannter Use Case"
-
-    items = []
-    gatekeepers = {}
-
-    for row in range(1, ws.max_row + 1):
-        code = _normalize_code(ws.cell(row=row, column=3).value)  # C
-        score = _parse_score(ws.cell(row=row, column=5).value)  # E
+    for row_index in range(1, worksheet.max_row + 1):
+        code = _normalize_code(worksheet.cell(row=row_index, column=3).value)
+        score = _parse_score(worksheet.cell(row=row_index, column=5).value)
         if code and score is not None:
             items.append((code, score))
 
-    for row in range(1, ws.max_row + 1):
-        gcode = ws.cell(row=row, column=1).value  # A
-        gval = ws.cell(row=row, column=7).value  # G
-        if isinstance(gcode, str) and gcode.strip().upper().endswith(("-G1", "-G2")):
-            if isinstance(gval, str):
-                gatekeepers[gcode.strip()] = gval.strip()
+    return items
 
+
+def _read_gatekeepers(worksheet: Any) -> dict[str, str]:
+    gatekeepers: dict[str, str] = {}
+
+    for row_index in range(1, worksheet.max_row + 1):
+        gatekeeper_code = worksheet.cell(row=row_index, column=1).value
+        gatekeeper_value = worksheet.cell(row=row_index, column=7).value
+
+        if not isinstance(gatekeeper_code, str) or not isinstance(gatekeeper_value, str):
+            continue
+
+        normalized_code = gatekeeper_code.strip().upper()
+        if normalized_code.endswith(GATEKEEPER_SUFFIXES):
+            gatekeepers[normalized_code] = gatekeeper_value.strip()
+
+    return gatekeepers
+
+
+def read_inputs(workbook: Workbook) -> dict[str, Any]:
+    worksheet = workbook["Input"]
+    use_case_name = worksheet["B4"].value or "Unbenannter Use Case"
+
+    items = _read_items(worksheet)
     if not items:
-        raise ValueError("Keine Item-Bewertungen gefunden. Bitte im Tab 'Input' die 1–5 Werte ausfüllen.")
+        raise ValueError("Keine Item-Bewertungen gefunden. Bitte im Tab 'Input' die Werte 1-5 ausfüllen.")
 
     return {
         "use_case_name": use_case_name,
         "items": items,
-        "gatekeepers": gatekeepers,
+        "gatekeepers": _read_gatekeepers(worksheet),
     }
